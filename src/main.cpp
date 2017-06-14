@@ -10,6 +10,7 @@
 #include "ardrone/ardrone.h"
 #include <zbar.h>
 #include <Windows.h>
+#include <math.h>
 // --------------------------------------------------------------------------
 // main(Number of arguments, Argument values)
 // Description  : This is the entry point of the program.
@@ -34,21 +35,23 @@ const int imgCenterY = 360 / 2;
 long deltaTime = 0;
 long lastTime = 0;
 
+long qrCodeTime = 0;
 // storing 3 circles for a average circle center and average
 Vec3f circle1, circle2, circle3;
 bool circleFound;
 Point2f QrCodeCenter;
+float QrCodeWith;
 bool qrCodeFound;
 int circleCounter = 0;
 
 cv::Mat frame;
 
-enum STATES { TAKEOFF, SEARCH, ALIGN, PENETRATE };
+enum STATES { TAKEOFF, SEARCH, ALIGN, PENETRATE, FINDCIRCLE };
 STATES currentState;
 
-enum commands { left, right, down, up, NoCommand, hoover, forward };
+enum commands { left, right, down, up, NoCommand, hoover, forward, circlePenetration };
 
-
+commands currentCommand;
 struct QrCode {
 	Point screenCoordinate;
 	Point2f worldCoordinate;
@@ -65,8 +68,11 @@ void updateTime();
 void search();
 void align();
 void penetrate();
+void findCircle();
 void alignWithCircle(double &vx, double &vy, double &vz, double &vr, Point2f workingPoint);
 void alignWithQrCode(double &vx, double &vy, double &vz, double &vr, Point2f workingPoint);
+
+
 
 int main(int argc, char *argv[])
 {
@@ -77,13 +83,21 @@ int main(int argc, char *argv[])
 	}
 	// Battery
 	std::cout << "Battery = " << ardrone.getBatteryPercentage() << "[%]" << std::endl;
-
+	ardrone.setFlatTrim();
 	currentState = TAKEOFF;
 	initTime();
 	// MAIN LOOP
 	while (1) {
+		
 		updateTime();
-		std::cout << "whileloop: " << deltaTime << std::endl;
+
+		circleFound = false;
+
+		qrCodeTime += deltaTime;
+		if (qrCodeFound > 1000) {
+			qrCodeTime = 0;
+			qrCodeFound = false;
+		}
 		// check for keys
 		int key = cv::waitKey(33);
 		if (key != -1) {
@@ -97,19 +111,22 @@ int main(int argc, char *argv[])
 		frame = ardrone.getImage();
 		circleFound = readCircle(frame);
 		qrCodeFound = readQrCode(frame);
-
+		
 
 		// STATE CONTROL
 		switch (currentState) {
-			case TAKEOFF:	takeoff(); break;
-			case SEARCH:	search(); break;
-			case ALIGN:		align(); break;
-			case PENETRATE: penetrate(); break;
+			case TAKEOFF:	std::cout << "takeoff" << std::endl;		takeoff(); break;
+			case SEARCH:	std::cout << "search" << std::endl;			search(); break;
+			case ALIGN:		std::cout << "align" << std::endl;			align(); break;
+			case FINDCIRCLE:std::cout << "findcircle" << std::endl;		findCircle(); break;
+			case PENETRATE: std::cout << "penetrate" << std::endl;		penetrate(); break;
 		}
-
+		cv::imshow("camera", frame);
 	}
 
+
 }
+
 
 
 int state = 0;
@@ -117,8 +134,7 @@ long bootupTime = 0;
 long takeoffTime = 0;
 
 void takeoff() {
-	
-	std::cout << deltaTime << std::endl;
+	std::cout << "takeoff" << std::endl;
 	if (state == 0) {
 		bootupTime += deltaTime;
 		if (bootupTime > BOOTUP_TIME) {
@@ -129,6 +145,7 @@ void takeoff() {
 	// takeoff
 	if (state == 1) {
 		takeoffTime += deltaTime;
+		std::cout << "takeoff time: " << takeoffTime << std::endl;
 		if (takeoffTime > TAKEOFF_TIME)
 			currentState = SEARCH;
 	}
@@ -143,7 +160,9 @@ void search() {
 
 long circleCounterTime = 0;
 long alignMoveTime = 0;
+
 void align() {
+	//std::cout << "align" << std::endl;
 	alignMoveTime += deltaTime;
 	double vx = 0.0;
 	double vy = 0.0;
@@ -157,7 +176,6 @@ void align() {
 	if (circleCounterTime > 1000) {
 		circleCounter = 0;
 		currentState = SEARCH;
-		return;
 	}
 
 
@@ -177,23 +195,34 @@ void align() {
 	}
 
 	if(alignMoveTime > 100){
+		//std::cout << "moving drone: vx" << vx << ", vy: " << vy << ", vz: " << vz << ", vr: " << vr << std::endl;
 		ardrone.move3D(vx, vy, vz, vr);
 		alignMoveTime = 0;
 	}
 }
 
 void alignWithCircle(double &vx, double &vy, double &vz, double &vr, Point2f workingPoint) {
+	//std::cout << "circle align: " << std::endl;
+	int marginOfError = 0;
 	commands currentCommand = hoover;
-	int marginOfError = 40;
+	/*int startMargin = 40;
+	float constant = 150;
+	 = (constant / findCircleRadius())*startMargin;
+	std::cout << "marginOfErrror: " << marginOfError << std::endl;
 
-
+	
+	*/
+	if (findCircleRadius() < 100) marginOfError = 70;
+	else marginOfError = 30;
 	bool centerV = false;
 	bool centerH = false;
 	if (imgCenterX > workingPoint.x + marginOfError) {
 		currentCommand = left;
+		vy = 0.2;
 	}
 	else if (imgCenterX < workingPoint.x - marginOfError) {
 		currentCommand = right;
+		vy = -0.2;
 	}
 	else {
 		centerH = true;
@@ -208,7 +237,7 @@ void alignWithCircle(double &vx, double &vy, double &vz, double &vr, Point2f wor
 	else {
 		centerV = true;
 	}
-	if (centerH && centerV && findCircleRadius() > 200) {
+	if (centerH && centerV && findCircleRadius() > 200) { 
 		currentState = PENETRATE;
 		return;
 	}
@@ -216,15 +245,13 @@ void alignWithCircle(double &vx, double &vy, double &vz, double &vr, Point2f wor
 		currentCommand = forward;
 	}
 
-	std::cout << "center-x: " << workingPoint.x << ", center-y: " << workingPoint.y << std::endl;
-	std::cout << "imgcenter-x: " << imgCenterX << ", imgcenter-y: " << imgCenterY << std::endl;
 	switch (currentCommand) {
-	case left: vr = 0.3; std::cout << "left" << std::endl;  break;
-	case right: vr = -0.3; std::cout << "right" << std::endl; break;
-	case up: vz = 0.3; std::cout << "up" << std::endl; break;
-	case down: vz = -0.3; std::cout << "down" << std::endl; break;
-	case hoover: std::cout << "Middle found Go Forward" << std::endl; break;
-	case forward: vx = 0.3; std::cout << "forward" << std::endl; break;
+	case left: vr = 0.3;  break;
+	case right: vr = -0.3; break;
+	case up: vz = 0.3; break;
+	case down: vz = -0.3; break;
+	case hoover:  break;
+	case forward: vx = 0.3; break;
 
 	}
 }
@@ -238,9 +265,14 @@ void alignWithQrCode(double &vx, double &vy, double &vz, double &vr, Point2f wor
 	bool centerH = false;
 	if (imgCenterX > workingPoint.x + marginOfError) {
 		currentCommand = left;
+		vr = 0.3;  
+		vy = 0.3;
+
 	}
 	else if (imgCenterX < workingPoint.x - marginOfError) {
 		currentCommand = right;
+		vr = -0.3;
+		vy = -0.3;
 	}
 	else {
 		centerH = true;
@@ -248,37 +280,63 @@ void alignWithQrCode(double &vx, double &vy, double &vz, double &vr, Point2f wor
 
 	if (workingPoint.y > imgCenterY + marginOfError) {
 		currentCommand = down;
+		vz = -0.3;
 	}
 	else if (workingPoint.y < imgCenterY - marginOfError) {
 		currentCommand = up;
+		vz = 0.3;
 	}
 	else {
 		centerV = true;
-	}
+	}	
 	if (centerH && centerV) {
+		std::cout << "forward and QRWidth is: " << QrCodeWith << std::endl;
 		currentCommand = forward;
+		if (QrCodeWith > 33) {
+		currentState = FINDCIRCLE;
+			return;
+		}
+		vx = 0.8;
 	}
 
-	std::cout << "center-x: " << workingPoint.x << ", center-y: " << workingPoint.y << std::endl;
-	std::cout << "imgcenter-x: " << imgCenterX << ", imgcenter-y: " << imgCenterY << std::endl;
-	switch (currentCommand) {
-	case left: vr = 0.3; std::cout << "left" << std::endl;  break;
-	case right: vr = -0.3; std::cout << "right" << std::endl; break;
-	case up: vz = 0.3; std::cout << "up" << std::endl; break;
-	case down: vz = -0.3; std::cout << "down" << std::endl; break;
-	case hoover: std::cout << "Middle found Go Forward" << std::endl; break;
-	case forward: vx = 0.3; std::cout << "forward" << std::endl; break;
+	//std::cout << "center-x: " << workingPoint.x << ", center-y: " << workingPoint.y << std::endl;
+	//std::cout << "imgcenter-x: " << imgCenterX << ", imgcenter-y: " << imgCenterY << std::endl;
+	//switch (currentCommand) {
+	//case left: vr = 0.3; std::cout << "left" << std::endl;  break;
+	//case right: vr = -0.3; std::cout << "right" << std::endl; break;
+	//case up: vz = 0.3; std::cout << "up" << std::endl; break;
+	//case down: vz = -0.3; std::cout << "down" << std::endl; break;
+	//case hoover: std::cout << "Middle found Go Forward" << std::endl; break;
+	//case forward: vx = 0.3; std::cout << "forward" << std::endl; break;
 
+	//}
+}
+
+long findCircleTime = 0;
+void findCircle() {
+	std::cout << "circleCounter " << circleCounter <<std::endl;
+
+	if (circleCounter >= 3) {
+		currentState = SEARCH;
+		return;
 	}
+	std::cout << "Find circle" << std::endl;
+	findCircleTime += deltaTime; 
+	ardrone.move3D(0, 0, 0.5, 0);
+		
+	if (findCircleTime > 7000)
+		currentState = SEARCH;
 }
 
 long penetrationTime = 0;
 void penetrate() {
 
-	ardrone.move3D(0.5, 0, 0, 0);
+	ardrone.move3D(0.8, 0, 0, 0);
 	penetrationTime += deltaTime;
-	if (penetrationTime > 1000)
+	if (penetrationTime > 2000) {
+		penetrationTime = 0;
 		currentState = SEARCH;
+	}
 }
 void initTime() {
 	SYSTEMTIME st;
@@ -333,9 +391,11 @@ bool readQrCode(cv::Mat frame) {
 			point.y += pts[i].y;
 		}
 		QrCode code;
+		
 		code.screenCoordinate.x = point.x / 4;
 		code.screenCoordinate.y = point.y / 4;
 		code.data = symbol->get_data();
+		QrCodeWith = abs(pts[0].x - code.screenCoordinate.x);
 		circle(frame, code.screenCoordinate, 10, Scalar(255, 20, 20), -1, 8);
 		for (int i = 0; i<4; i++) { line(frame, pts[i], pts[(i + 1) % 4], Scalar(255, 20, 20), 3); }
 		
@@ -370,7 +430,7 @@ bool readCircle(cv::Mat frame) {
 	cv::GaussianBlur(red_hue_image,              // input image
 		imgBlurred,                // output image
 		cv::Size(5, 5),            // smoothing window width and height in pixels
-		1.8);                      // sigma value, determines how much the image will be blurred
+		2.5);                      // sigma value, determines how much the image will be blurred
 
 	Canny(imgBlurred,                       // input image
 		imgCanny,                         // output image
@@ -435,3 +495,33 @@ float findCircleRadius() {
 	return circleCombined[2];
 }
 
+//bool isItFlySafe(int screenMargin) {
+//
+//	float relativeX = (imgCenterX)*(screenMargin*(imgheight / imgWitdh)); //Adjusting for screen ratio
+//	float relativeY = (imgCenterY*screenMargin);
+//
+//	bool isObjectCloseEnough = false;
+//
+//	Point2f circleCenter = findCircleCenter();
+//	float circleRadius = findCircleRadius();
+//
+//	if (QrCodeCenter.x + relativeX < QRcodeRadius + QrCodeCenter.x && QrCodeCenter.x - relativeX > QRcodeRadius - QrCodeCenter.x) {
+//		if (QrCodeCenter.y + relativeY < QRcodeRadius + QrCodeCenter.y && QrCodeCenter.y - relativeY > QRcodeRadius - QrCodeCenter.y) {
+//			isObjectCloseEnough = true;
+//		}
+//		else {
+//			isObjectCloseEnough = false;
+//		}
+//
+//	}
+//	else if (circleCenter.x + relativeX < circleRadius + circleCenter.x && circleCenter.x - relativeX > circleRadius - circleCenter.x) {
+//		if (circleCenter.y + relativeY < circleRadius + circleCenter.y && circleCenter.y - relativeY > circleRadius - circleCenter.y) {
+//			isObjectCloseEnough = true;
+//		}
+//		else {
+//			isObjectCloseEnough = false;
+//		}
+//	}
+//
+//	return false;
+//}
