@@ -71,6 +71,7 @@ void penetrate();
 void findCircle();
 void alignWithCircle(double &vx, double &vy, double &vz, double &vr, Point2f workingPoint);
 void alignWithQrCode(double &vx, double &vy, double &vz, double &vr, Point2f workingPoint);
+void GammaCorrection(Mat& src, Mat& dst, float fGamma);
 int calcMarginOfError();
 int marginOfError = 0;
 
@@ -110,9 +111,24 @@ int main(int argc, char *argv[])
 		
 		// record a frame from camera
 		frame = ardrone.getImage();
-		circleFound = readCircle(frame);
+		Mat gammaCorrected1;
+		Mat gammaCorrected2;
+		GammaCorrection(frame, gammaCorrected1, 2.0f);
+		GammaCorrection(frame, gammaCorrected2, 0.5f);
+		if (readCircle(frame)) {
+			circleFound = true;
+		}
+		else if (readCircle(gammaCorrected1)) {
+			circleFound = true;
+		}
+		else if (readCircle(gammaCorrected2)) {
+			circleFound = true;
+		}
+		//else {
+		//	circleFound = false;
+		//}
 		qrCodeFound = readQrCode(frame);
-		
+		 
 
 		// STATE CONTROL
 		switch (currentState) {
@@ -122,9 +138,9 @@ int main(int argc, char *argv[])
 			case FINDCIRCLE:/*std::cout << "findcircle" << std::endl;*/		findCircle(); break;
 			case PENETRATE: /*std::cout << "penetrate" << std::endl;*/		penetrate(); break;
 		}
-		line(frame, cv::Point(0, imgCenterY), cv::Point(640, imgCenterY), Scalar(155, 40, 50));
-		line(frame, cv::Point(imgCenterX, 0), cv::Point(imgCenterX, 360), Scalar(155, 40, 50));
-		circle(frame, cv::Point(imgCenterX, imgCenterY), marginOfError, Scalar(155, 60, 80), 2);
+		cv::line(frame, cv::Point(0, imgCenterY), cv::Point(640, imgCenterY), Scalar(155, 40, 50));
+		cv::line(frame, cv::Point(imgCenterX, 0), cv::Point(imgCenterX, 360), Scalar(155, 40, 50));
+		cv::circle(frame, cv::Point(imgCenterX, imgCenterY), marginOfError, Scalar(155, 60, 80), 2);
 		cv::imshow("camera", frame);
 	}
 }
@@ -184,14 +200,14 @@ void search() {
 
 	if (ardrone.getAltitude() > 2.0f || ardrone.getAltitude() < 1.0f) {
 		double vz = 0;
-		std::cout << "Altitude: " << ardrone.getAltitude() << std::endl;
+		//std::cout << "Altitude: " << ardrone.getAltitude() << std::endl;
 		if (ardrone.getAltitude() > 2.0f) {
 			vz = -0.1;
-			std::cout << "To high" << std::endl;
+			//std::cout << "To high" << std::endl;
 		}
 		else {
 			vz = 0.1;
-			std::cout << "To low" << std::endl;
+			//std::cout << "To low" << std::endl;
 		}
 		ardrone.move3D(0, 0, vz, 0);
 		return;
@@ -206,10 +222,10 @@ void search() {
 	double vr = 0.0;
 
 	if ( searchState % 2 == 0) {
-		vr = -0.5;
+		vr = -0.8;
 	}
 	else {
-		vr = 0.7;
+		vr = 0.5;
 	}
 
 
@@ -262,12 +278,12 @@ void align() {
 	if (circleCounter >= 8)
 	{
 		workingPoint = findCircleCenter();
-		circle(frame, workingPoint, 10, Scalar(155, 40, 50), -1, 8);
+		cv::circle(frame, workingPoint, 10, Scalar(155, 40, 50), -1, 8);
 		alignWithCircle(vx, vy, vz, vr, workingPoint);
 	}
 	else if (qrCodeFound) {
 		workingPoint = QrCodeCenter;
-		circle(frame, workingPoint, 10, Scalar(155, 40, 50), -1, 8);
+		cv::circle(frame, workingPoint, 10, Scalar(155, 40, 50), -1, 8);
 		alignWithQrCode(vx, vy, vz, vr, workingPoint);
 	}
 
@@ -316,10 +332,13 @@ void alignWithCircle(double &vx, double &vy, double &vz, double &vr, Point2f wor
 	else {
 		centerV = true;
 	}
-	if (centerH && centerV && findCircleRadius() > 190) {
+
+	// Radius was 190: Casper
+	if (centerH && centerV && findCircleRadius() > 170) {
 		penetrateWaitTimer += deltaTime;
 		
 			currentState = PENETRATE;
+			circleCounter = 0;
 			std::cout << "currentState: PENETRATE" << std::endl;
 			
 			
@@ -436,7 +455,7 @@ void penetrate() {
 	ardrone.move3D(1, 0, 0, 0);
 	
 	penetrationTime += deltaTime;
-	if (penetrationTime > 1700) {
+	if (penetrationTime > 2000) {
 		ardrone.move3D(0, 0, 0, 0);
 		penetrationTime = 0;
 		currentState = SEARCH;
@@ -506,32 +525,37 @@ bool readQrCode(cv::Mat frame) {
 		code.screenCoordinate.y = point.y / 4;
 		code.data = symbol->get_data();
 		QrCodeWith = abs(pts[0].x - code.screenCoordinate.x);
-		circle(frame, code.screenCoordinate, 10, Scalar(255, 20, 20), -1, 8);
-		for (int i = 0; i<4; i++) { line(frame, pts[i], pts[(i + 1) % 4], Scalar(255, 20, 20), 3); }
+		cv::circle(frame, code.screenCoordinate, 10, Scalar(255, 20, 20), -1, 8);
+		for (int i = 0; i<4; i++) { cv::line(frame, pts[i], pts[(i + 1) % 4], Scalar(255, 20, 20), 3); }
 		
 		
 		centerOfQR.x = code.screenCoordinate.x;
 		centerOfQR.y = code.screenCoordinate.y;
 
 		
+
 	}
 	QrCodeCenter.x = centerOfQR.x;
 	QrCodeCenter.y = centerOfQR.y;
 	return QrCodeCenter.x >= 0;
 }
 
-bool readCircle(cv::Mat frame) {
+bool readCircle(cv::Mat cFrame) {
 	cv::Mat imgGrayscale;
 	cv::Mat imgBlurred;
 	cv::Mat imgCanny;
 
 	cv::Mat hsv_image;
-	cv::cvtColor(frame, hsv_image, cv::COLOR_BGR2HSV);
+	cv::cvtColor(cFrame, hsv_image, cv::COLOR_BGR2HSV);
 
 	cv::Mat lower_red_hue_range;
 	cv::Mat upper_red_hue_range;
+	//cv::inRange(hsv_image, cv::Scalar(0, 100, 100), cv::Scalar(10, 255, 255), lower_red_hue_range);
+	//cv::inRange(hsv_image, cv::Scalar(150, 100, 100), cv::Scalar(160, 255, 255), upper_red_hue_range);
 	cv::inRange(hsv_image, cv::Scalar(0, 100, 100), cv::Scalar(10, 255, 255), lower_red_hue_range);
 	cv::inRange(hsv_image, cv::Scalar(150, 100, 100), cv::Scalar(160, 255, 255), upper_red_hue_range);
+
+
 
 	// Combine the above two images
 	cv::Mat red_hue_image;
@@ -540,7 +564,7 @@ bool readCircle(cv::Mat frame) {
 	cv::GaussianBlur(red_hue_image,              // input image
 		imgBlurred,                // output image
 		cv::Size(5, 5),            // smoothing window width and height in pixels
-		2.5);                      // sigma value, determines how much the image will be blurred
+		2.0);                      // sigma value, determines how much the image will be blurred
 
 	Canny(imgBlurred,                       // input image
 		imgCanny,                         // output image
@@ -627,6 +651,67 @@ int calcMarginOfError() {
 	else if (marginOfError < 30)
 		marginOfError = 30;
 	return marginOfError;
+}
+
+void GammaCorrection(Mat& src, Mat& dst, float fGamma)
+{
+
+	unsigned char lut[256];
+
+	for (int i = 0; i < 256; i++)
+
+	{
+
+		lut[i] = saturate_cast<uchar>(pow((float)(i / 255.0), fGamma) * 255.0f);
+
+	}
+
+	dst = src.clone();
+
+	const int channels = dst.channels();
+
+	switch (channels)
+
+	{
+
+	case 1:
+
+	{
+
+		MatIterator_<uchar> it, end;
+
+		for (it = dst.begin<uchar>(), end = dst.end<uchar>(); it != end; it++)
+
+			*it = lut[(*it)];
+
+		break;
+
+	}
+
+	case 3:
+
+	{
+
+		MatIterator_<Vec3b> it, end;
+
+		for (it = dst.begin<Vec3b>(), end = dst.end<Vec3b>(); it != end; it++)
+
+		{
+
+			(*it)[0] = lut[((*it)[0])];
+
+			(*it)[1] = lut[((*it)[1])];
+
+			(*it)[2] = lut[((*it)[2])];
+
+		}
+
+		break;
+
+	}
+
+	}
+
 }
 
   
